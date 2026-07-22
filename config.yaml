@@ -1,0 +1,155 @@
+# ============================================================
+# DJI 实时视觉识别系统 - 配置文件
+# 目标：实时识别 鸟类 / 电线 / 电线杆，并在画面上框出
+# 硬件：RTX 3050 Ti (4GB) 本地运行
+# ============================================================
+
+capture:
+  # 取流方式：
+  #   window  -> 按窗口标题抓取 DJILive.exe 画面（推荐）
+  #   monitor -> 抓取整块显示器
+  #   region  -> 抓取固定矩形区域（屏幕像素 left,top,right,bottom）
+  mode: window
+  window_title: "DJI"          # 窗口标题包含的子串；DJILive 窗口通常含 "DJI"
+  monitor: 1                    # mode=monitor 时使用的显示器编号（1=主屏）
+  region: [0, 0, 1280, 720]   # mode=region 时 (left, top, right, bottom)
+  # dxcam 抓到的帧为 RGB，需转 BGR；mss 抓到的为 BGR，无需转换。
+  # 一般无需改动。
+  capture_format: "rgb"
+  # 抓帧上限分辨率（降低可提升速度）。null = 原窗口分辨率
+  capture_width: 1280
+  capture_height: 720
+
+models:
+  device: "cuda"        # "cuda" 用独显加速；无独显或出错会自动回退 "cpu"
+  imgsz: 1280           # 推理输入尺寸；电力线目标细长且远，1280 比 640 更不易漏检（稍慢）
+  quality: "high"       # high=高清(1280/Thalos~8FPS) medium=均衡(960/Thalos~12FPS) fast=流畅(960/TIC~25FPS)
+  tracking: true        # ByteTrack 追踪：true=跟踪已检测物体（跳帧省算力、ID稳定跟进）
+  auto_cascade: false    # 自动挡：true=轻模型(TIC)先跑，没东西再调重模型(Thalos)，平衡速度与精度
+
+  # ---------- 鸟类：用 COCO 预训练 YOLOv8n（首次自动下载） ----------
+  bird:
+    enabled: true
+    weights: "yolov8n.pt"
+    conf: 0.35          # 置信度阈值，越低越多框（也更易误报）
+    iou: 0.45
+    cascade_level: 1    # 自动挡优先级：1=最轻（先跑）
+    # 按模型里的类别“名称”映射为中文标签与颜色(BGR)
+    classes:
+      bird: {label: "鸟", color: [0, 200, 255]}
+      train: {label: "高铁/火车", color: [0, 255, 255]}   # COCO 的 train 类（含高铁/普速列车，无需新权重）
+
+  # ============================================================
+  # 电线/电力设施检测 —— 多模型融合（可同时挂多个权重一起跑）
+  # ------------------------------------------------------------
+  # detector.py 会把下面每个「独立模型段」都各自加载、各自推理，
+  # 结果合并到同一画面。所以你可以把 Thalos + TIC 一起挂上同时跑，
+  # 各管各的类别（Thalos:电线/电线杆/近电类；TIC:塔/绝缘子/导线）。
+  # method:
+  #   auto -> 若 weights 文件存在则用深度学习，否则自动 CV 兜底（零下载）
+  #   dl   -> 强制深度学习（需 weights 存在）
+  #   cv   -> 强制 OpenCV 直线检测兜底
+  # 说明：本机无外网，下面两个权重文件到位前会自动走 CV 兜底；
+  #   把 .pt 放进 models/ 后（U盘拷或临时联网下），无需改代码自动切深度学习。
+  # ============================================================
+
+  # ---------- 模型A：Thalos Powerline Safety（HF，类别与本项目最对齐）----------
+  # 权重文件名：powerline_safety_weights.pt（HuggingFace thalostech2025/thalos-powerline-safety-v1）
+  powerline:
+    enabled: true
+    method: "auto"
+    weights: "models/powerline_safety_weights.pt"   # Thalos（Cable + 多类杆塔；分割模型）
+    cascade_level: 2    # 自动挡优先级：2=中等（鸟没跑够再跑）
+    conf: 0.20
+    iou: 0.45
+    classes:
+      # Thalos 实际类别（分割模型）：Cable/cable=电线；tower_*=电线杆；void=背景(不画)
+      Cable:         {label: "电线",   color: [0, 0, 255]}
+      cable:         {label: "电线",   color: [0, 0, 255]}
+      tower_lattice: {label: "电线杆", color: [255, 0, 0]}
+      tower_tucohy:  {label: "电线杆", color: [255, 0, 0]}
+      tower_wooden:  {label: "电线杆", color: [255, 0, 0]}
+      void:          {label: "背景", enabled: false}
+    # CV 直线检测兜底参数（Thalos 权重不在时启用；无需任何下载）
+    cv:
+      enabled: true
+      wire_label: "电线"
+      pole_label: "电线杆"
+      wire_color: [0, 0, 255]
+      pole_color: [255, 0, 0]
+      canny_low: 50
+      canny_high: 150
+      threshold: 80
+      min_len: 40
+      max_gap: 10
+      h_thr: 25          # 线段角度小于此值(度)视为电线(近水平)
+      v_thr: 65          # 线段角度大于此值(度)视为电线杆(近垂直)
+      cluster_gap: 30     # 同一根线/杆的像素聚类间距
+      pad: 4
+
+  # （原 TIC 单独段已合并进上面 powerline 段：weights 直接指向 tic_nano.pt，
+  #   类别也已映射到 电线杆/绝缘子/电线，无需两段重复加载。）
+
+display:
+  window_name: "DJI 实时识别"
+  show_fps: true
+  show_conf: true
+  box_thickness: 2
+  font_scale: 0.5
+  save_dir: "captures"     # 按 's' 键截图保存到此处
+
+# ---------- 危险靠近预警（task ②）----------
+# 两种触发：
+#   A) 距离型：危险物(鸟/无人机/人) 的框 离 带电体(电线/电线杆/近电类) 的框太近
+#   B) 直接型：深度学习模型直接输出「高风险靠近/设备近电/车辆近电/吊臂近电」
+# 无论 CV 直线兜底 还是 深度学习模式 都生效。
+alarm:
+  enabled: true
+  # 危险物（会主动靠近电线的目标）
+  hazard_labels: ["鸟", "无人机", "人"]
+  # 带电体（被靠近的危险目标）
+  target_labels: ["电线", "电线杆", "设备近电", "车辆近电", "吊臂近电", "高风险靠近"]
+  # 距离型阈值（像素，基于框边缘最近距离；越小越危险）
+  warn_px: 120        # 黄：较近，提醒
+  danger_px: 50        # 红：非常近，危险
+  # 模型直接判危的类别（无需距离判断，最高告警）
+  direct_danger_labels: ["高风险靠近", "设备近电", "车辆近电", "吊臂近电"]
+  show_links: true       # 画 危险物↔带电体 连线与距离
+  beep: false           # 危险时 Windows 系统蜂鸣（需手动开）
+  beep_cooldown: 1.5
+
+# ---------- 自定义报警（识别出即触发：屏幕红闪 + 横幅）----------
+# 与上面「危险靠近」(距离型)不同，这里只要画面里出现下面任一标签，
+# 就立即触发：屏幕红色边框闪烁 + 底部自定义横幅文字（可选蜂鸣）。
+# 例如：识别出「高铁/火车」就全屏红闪，提醒飞手注意飞行安全。
+# targets 可任意增删；label 必须与检测输出的标签完全一致。
+alerts:
+  enabled: true
+  blink_hz: 2.0            # 红闪频率（次/秒）
+  border_thickness: 14      # 屏幕红色边框粗细(像素)
+  beep_cooldown: 1.5
+  # 本段保留给「真正的威胁」（全屏红闪）。
+  # 注意：高铁/鸟 已改到下面的 `sighting:`（看见提醒+自动拍照，不算威胁），
+  # 所以这里默认不挂任何目标；想对某标签做红闪威胁，往 targets 加即可。
+  targets: []
+
+# ---------- 看见提醒（高铁 / 鸟等「看见即可、不是威胁」）----------
+# 与「危险靠近」(alarm) 和「威胁红闪」(alerts) 不同：这里的目标看见了就好，
+# 不需要吓人的红闪——只要画面里出现下面任一标签，就：
+#   - 顶部青色「看见提醒」软横幅（不红闪、不整屏红框）
+# 高铁/鸟 复用鸟类模型(COCO train 类)，无需新权重。targets 可任意增删。
+# 说明：默认【不自动拍照】。若想要「看见就拍一张」，把 capture 改为 true 即可。
+sighting:
+  enabled: true
+  remind: true            # 顶部青色软提醒横幅
+  capture: false          # 默认不自动拍照（仅提醒）；改为 true 才会在新出现时存一张图
+  capture_dir: "captures/sighting"   # 拍照保存子目录
+  banner_color: [0, 255, 255]   # 青色(BGR)，与危险红区分
+  targets:
+    - label: "高铁/火车"     # 需与 bird 模型里 train 类的显示标签一致
+    - label: "鸟"
+
+web:
+  enabled: false           # 改为 true 可同时用浏览器（手机/云端）实时查看
+  host: "0.0.0.0"
+  port: 8080
