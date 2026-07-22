@@ -1,0 +1,14 @@
+.venv/
+captures/
+__pycache__/
+*.pyc
+models/*.pt
+test_output.jpg
+
+# 打包/分发产物（体积巨大，禁止入库）
+dist/
+dist_package/
+build/
+*.log
+.seen_help
+__pycache__/
