@@ -1,0 +1,27 @@
+# 第三方组件与归属声明（NOTICE）
+
+本项目以 **GPL-3.0** 开源。以下组件以各自许可证随附，版权归其原
+作者所有；本项目自身代码以 GPL-3.0 授权。
+
+## 音乐功能
+- **GD 音乐台 API**（https://music-api.gdstudio.xyz）
+  本项目仅在运行时通过 HTTP 调用该 API 获取搜索 / 播放 / 歌词等数据，
+  **不打包、不包含其任何源代码**。该服务版权归其提供方所有，
+  使用须遵守其服务条款。
+
+## 核心依赖及其许可证
+- Ultralytics YOLOv8（`ultralytics`）— AGPL-3.0
+- PyTorch（`torch` / `torchvision`）— BSD-3-Clause
+- OpenCV（`cv2`）— Apache-2.0
+- NumPy — BSD-3-Clause
+- Pillow（`PIL`）— HPND
+- PyYAML（`yaml`）— MIT
+- DXCam / MSS — MIT
+- ffmpeg（运行时二进制）— GPL-2.0+ / LGPL
+- 本地音乐播放调用 Windows WinMM API（系统组件，非本项目代码）
+
+## 说明
+- 本项目自身代码以 GPL-3.0 授权。
+- 由于随附的 `ultralytics` 为 AGPL-3.0，分发本软件时须同时提供
+  相应源代码（其上游已公开）。
+- 若你修改并分发本软件，修改后的整体同样须以 GPL-3.0（或兼容许可）开源。
