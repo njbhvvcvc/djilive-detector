@@ -1,0 +1,9 @@
+{
+  "source": "netease",
+  "br": "320",
+  "count": 20,
+  "proxy": "",
+  "autoLyric": true,
+  "autoLyricFile": true,
+  "volume": 0.9
+}
