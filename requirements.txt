@@ -1,0 +1,15 @@
+# 依赖清单（供参考；首次安装请用 setup.bat 以正确获取 CUDA 版 torch）
+# 说明：PyPI 上的 torch 默认是 CPU 版；CUDA 版需从 download.pytorch.org 获取，
+# 详见 setup.bat 中的安装命令（--index-url https://download.pytorch.org/whl/cu124）。
+
+ultralytics
+opencv-python
+numpy
+dxcam
+mss
+pywin32
+pyyaml
+huggingface_hub
+fastapi
+uvicorn[standard]
+# torch / torchvision 通过 setup.bat 以 CUDA 版安装，不要在此用纯 PyPI 安装
