@@ -10,6 +10,10 @@ mss
 pywin32
 pyyaml
 huggingface_hub
+Pillow              # app.py 用 from PIL import Image, ImageTk
+scipy              # lut.py 用 from scipy.ndimage import map_coordinates
+imageio-ffmpeg   # rtmp_server.py 用 import imageio_ffmpeg
+requests            # music_api.py 用 import requests
 fastapi
 uvicorn[standard]
 # torch / torchvision 通过 setup.bat 以 CUDA 版安装，不要在此用纯 PyPI 安装

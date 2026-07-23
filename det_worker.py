@@ -58,6 +58,7 @@ def detector_process(in_q, out_q, cfg):
             det = None
             safe_put(("ERR", f"模型加载失败: {e}"))
 
+    _fc = 0  # 帧计数：用于节流式释放 CUDA 缓存（每 60 帧一次）
     # 主循环：任何异常都必须被吞掉，保证 worker 永不退出（识别可持续）。
     while True:
         try:
@@ -97,8 +98,13 @@ def detector_process(in_q, out_q, cfg):
                     traceback.print_exc()
                     _free_gpu()
                     safe_put(("ERR", f"推理异常(已跳过本帧): {e}"))
-            # 周期性释放显存，缓解 YOLO 推理的 CUDA 缓存堆积
-            _free_gpu()
+            # 不再每帧清空 CUDA 缓存：每帧 empty_cache() 会强制设备同步、
+            # 打断推理与前后帧的 GPU 重叠，显著拖慢吞吐。改为每 60 帧释放一次
+            # 作为兜底（仍自愈），推理 OOM/异常时仍见上方 except 按需释放。
+            _fc += 1
+            if _fc >= 60:
+                _fc = 0
+                _free_gpu()
         except Exception:
             # 兜底：任何遗漏异常都吞掉并继续，worker 绝不退出
             try:

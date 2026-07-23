@@ -57,15 +57,17 @@ class MultiModelDetector:
                 else:
                     print(f"[detector] 模型 {name} 既无权重也无 CV 配置，跳过。")
 
+        # 按 cascade_level 升序一次性排序（自动挡级联依赖此顺序）。
+        # 不放在 detect() 里，避免每帧重复排序浪费 CPU。
+        self.dl_specs.sort(key=lambda x: int(x[2].get("cascade_level", 9)))
+
     def detect(self, frame):
         """
         输入 BGR 帧，返回检测列表：
         [{'bbox':(x1,y1,x2,y2), 'label':str, 'color':(b,g,r), 'conf':float, 'source':str}, ...]
         """
         out = []
-        # 深度学习（自动挡级联：按 cascade_level 升序跑，检测够了就跳过更重的模型）
-        if self.auto_cascade:
-            self.dl_specs.sort(key=lambda x: int(x[2].get("cascade_level", 9)))
+        # 深度学习（自动挡级联：dl_specs 已在 __init__ 按 cascade_level 升序排好）
         best_cascade_seen = 0
         # 深度学习
         for name, model, spec in self.dl_specs:

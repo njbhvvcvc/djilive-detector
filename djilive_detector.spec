@@ -13,7 +13,7 @@ hiddenimports = ['ultralytics', 'torch', 'torchvision', 'cv2', 'numpy', 'dxcam',
 hiddenimports += collect_submodules('ultralytics')
 
 
-datas = [('config.yaml', '.'), ('yolov8n.pt', '.'), ('models', 'models'), ('music_player.html', '.'), ('assets/backgrounds', 'assets/backgrounds')]
+datas = [('config.yaml', '.'), ('yolov8n.pt', '.'), ('models', 'models'), ('music_player.html', '.')]
 if FFMPEG_BIN and os.path.isfile(FFMPEG_BIN):
     datas.append((FFMPEG_BIN, '.'))
 

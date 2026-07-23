@@ -26,6 +26,8 @@ class VideoSource:
         self.pre_reconnect = pre_reconnect  # 断流重启钩子（如重启 RTMP 服务器）
         self.cap = None
         self._proc = None
+        self._ff_w = None   # ffmpeg 子进程模式下的帧宽（_open_ffmpeg 探测）
+        self._ff_h = None
         self._retries = 0
         self._max_retries = 50  # 约 40s 后放弃
         self._open()
@@ -62,29 +64,48 @@ class VideoSource:
             self.cap = None
 
     def _open_ffmpeg(self):
-        """用系统 ffmpeg 子进程把 RTMP 拉成 rawvideo 喂给 stdout。"""
+        """用系统 ffmpeg 子进程把 RTMP 拉成 rawvideo 喂给 stdout。
+        先通过 ffprobe 探测宽高写进 _ff_w/_ff_h；探测失败则回退默认
+        1280x720。修复原逻辑把 _ff_w 置 None 导致 _proc 模式永远读不到帧。
+        """
         try:
+            w, h = self._probe_ffmpeg_size()
+            if not w or not h:
+                w, h = 1280, 720
+                print("[source] ffprobe 未返回尺寸，回退 1280x720")
+            self._ff_w, self._ff_h = w, h
             self._proc = subprocess.Popen(
                 ["ffmpeg", "-hide_banner", "-loglevel", "error",
                  "-fflags", "nobuffer", "-flags", "low_delay",
                  "-i", self.url,
                  "-f", "rawvideo", "-pix_fmt", "bgr24", "-"],
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=10**7)
-            # 探测一帧以确定尺寸
-            w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)) if self.cap else 0
-            self._ff_w = None
         except Exception as e:
             print(f"[source] ffmpeg 子进程启动失败: {e}")
             self._proc = None
+
+    def _probe_ffmpeg_size(self):
+        """用 ffprobe 取视频流宽高；失败返回 (0,0)。"""
+        try:
+            out = subprocess.check_output(
+                ["ffprobe", "-v", "error", "-select_streams", "v:0",
+                 "-show_entries", "stream=width,height",
+                 "-of", "csv=p=0", self.url],
+                stderr=subprocess.DEVNULL, timeout=8)
+            parts = out.decode("utf-8", "ignore").strip().split(",")
+            if len(parts) >= 2:
+                return int(parts[0]), int(parts[1])
+        except Exception:
+            pass
+        return 0, 0
 
     def get_frame(self):
         """返回 BGR 帧；无帧/断流返回 None 并自动重连。
         直播模式下（RTMP/RTSP/HTTP）自动丢掉堆积帧，保证实时性。"""
         if self._proc is not None:
-            # ffmpeg 子进程模式
-            import struct
-            if self._ff_w is None:
-                return None  # 需先确定尺寸（简化：要求提供尺寸）
+            # ffmpeg 子进程模式（尺寸已由 _open_ffmpeg 经 ffprobe 探测写定）
+            if self._ff_w is None or self._ff_h is None:
+                return None  # 尺寸未知（极少触发）
             raw = self._proc.stdout.read(self._ff_w * self._ff_h * 3)
             if not raw or len(raw) < self._ff_w * self._ff_h * 3:
                 self._reconnect()

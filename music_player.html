@@ -290,7 +290,7 @@
 <!-- Player bar -->
 <div class="player">
   <div class="np">
-    <img class="cov" id="npCov" alt="" />
+    <img class="cov" id="npCov" alt="" onerror="this.style.visibility='hidden'" />
     <div class="info">
       <div class="nm" id="npName">未在播放</div>
       <div class="ar" id="npArtist">—</div>
@@ -320,7 +320,7 @@
 <!-- Lyrics -->
 <div class="lyric-panel" id="lyricPanel">
   <div class="lyric-head">
-    <img class="cov" id="lyricCov" alt="" />
+    <img class="cov" id="lyricCov" alt="" onerror="this.style.visibility='hidden'" />
     <div>
       <div class="tt" id="lyricTitle">歌词</div>
       <div class="ta" id="lyricArtist"></div>
@@ -627,6 +627,7 @@
     const cached = getCachedLyric(track);
     if(cached){
       applyLyric(track, cached);
+      updateLyricHead(track);   // 切歌即刷新歌词面板头（封面/标题/歌手），即便面板已打开
       if(state.autoLyric) fireLyricHook(cached, buildLRC(cached));
       return;
     }
@@ -635,6 +636,7 @@
       const d = await fetchJSON(u);
       const meta = cacheLyric(track, d);   // 落盘到 localStorage + 内存缓存
       applyLyric(track, meta);
+      updateLyricHead(track);
       if(state.autoLyric){
         const lrc = buildLRC(meta);
         fireLyricHook(meta, lrc);          // 触发扩展钩子
@@ -647,11 +649,28 @@
   function applyLyric(track, meta){
     const orig = parseLRC(meta.lyric);
     const trans = parseLRC(meta.tlyric);
-    const tmap = {};
-    trans.forEach(t=> tmap[Math.round(t.time*100)] = t.text);
-    state.lyrics = orig.map(o=>({time:o.time, orig:o.text, trans: tmap[Math.round(o.time*100)] || ""}));
+    // 译文按时间排序后用「最近邻」匹配：原文行取时间最接近的译文行。
+    // 部分 API 的原文/译文时间戳存在细微偏差，精确取整会让整列译文漏配；
+    // 容忍 1.5s 内偏差，超出则视为无译文（保持空）。
+    trans.sort((a,b)=>a.time-b.time);
+    state.lyrics = orig.map(o=>{
+      let best="", bd=Infinity;
+      for(const t of trans){
+        const d=Math.abs(t.time-o.time);
+        if(d<bd){ bd=d; best=t.text; }
+      }
+      return {time:o.time, orig:o.text, trans: bd<=1.5 ? best : ""};
+    });
     renderLyricBox();
     if($("lyricPanel").classList.contains("show")) $("lyricBox").scrollTop = 0;
+  }
+  // 切歌 / 打开歌词面板时，同步刷新面板头（封面 / 标题 / 歌手）
+  function updateLyricHead(track){
+    const cov = $("lyricCov");
+    if(track && track.pic_id){ cov.src = picURL(track,500); cov.style.visibility="visible"; }
+    else { cov.style.visibility="hidden"; }
+    $("lyricTitle").textContent = (track && track.name) || "歌词";
+    $("lyricArtist").textContent = (track && track.artist) || "—";
   }
 
   /* ================= 歌词自动下载 + 扩展钩子 ================= */
@@ -921,7 +940,7 @@
       p.classList.toggle("show");
       if(p.classList.contains("show")){
         const t = state.queue[state.current];
-        if(t){ $("lyricCov").src = t.pic_id ? picURL(t,500) : ""; $("lyricTitle").textContent = t.name; $("lyricArtist").textContent = t.artist; }
+        if(t) updateLyricHead(t);
         $("lyricBox").scrollTop = 0;
       }
     });

@@ -12,3 +12,6 @@ build/
 *.log
 .seen_help
 __pycache__/
+
+# 运行时生成的图片缓存（Lorem Picsum 背景轮播，禁止入库）
+assets/picsum_cache/

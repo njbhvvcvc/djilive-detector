@@ -175,3 +175,49 @@ djilive-detector/
   （SDPM/HAD/EFR 模块），**该代码在作者 Google Drive，不在 GitHub**（github 主站虽通，但那份代码没上 github）。
   你在能开 Drive 的机器上下那个「Code Availability」文件夹，把其中 `ultralytics/` 覆盖进 venv 的 `site-packages/ultralytics/` 即可。
   另外它是**电缆分割+断股检测**多任务模型，类别是 cable/broken_strand 这类，要接进本项目「电线/电线杆」报警还需做输出→框映射，到时告诉我，我来接。
+
+---
+
+## 2026-07-23 修复说明（代码小修小补周期 + 首页图片轮播改 Lorem Picsum）
+
+> 本周期为「代码小修小补」阶段：修两类真实 Bug、修此前静态扫描发现的 A/B 类问题，并把首页背景图片轮播的来源从「本地图集」改为「Lorem Picsum 在线源」。
+
+### 一、真实 Bug 修复
+
+**A. 点「音乐 / 首页」会把正在进行的直播掐断**
+- **根因**：`App._clear_pages()` 无条件调用播放页的 `_back_cleanup()`，其中 `rtmp_server.stop()` 会销毁 RTMP 收流服务器 + `source.release()`，所以在直播中点顶部「🎵 音乐」或「首页」会把推流会话毁掉，必须回首页重开。
+- **修法**（`app.py`）：
+  - `_clear_pages(keep_player=True)` 默认改为【保留播放页、仅 `pack_forget` 隐藏】，直播/识别在后台继续；只有播放页自己的「◀ 返回首页」(`_back_cleanup`) 才真正停流。
+  - `show_player()` 复用已存在且 mode 一致的播放页（不重建、不重启 RTMP 服务器）。
+  - `show_home` / `show_music` 传 `keep_player=True`；新增 `show_video()` 与顶部「📺 视频」按钮，方便从其它页切回正在进行的直播。
+  - `PlayerPage` 的 `_tick` / `_on_escape` / `_toggle_pause` 加 `winfo_viewable()` 守卫（隐藏时不渲染/不误触快捷键）；`_back_cleanup` 解绑 `<space>` 并置 `app.player=None`。
+  - `HomePage._start_live` / `_start_file` 增加复用守卫：后台同路直播/文件仍运行时直接 `show_video`，避免重复抢 1935 端口。
+
+**B. GD 音乐台（`music_player.html`）歌词 / 封面问题**
+- 封面加载失败优雅降级：`npCov` / `lyricCov` 加 `onerror` 隐藏破图、露出渐变占位。
+- 译文匹配改为「最近邻 + 1.5s 容差」：原文行取时间最接近的译文行，修复因原文/译文时间戳细微偏差导致整列翻译空白（原 `round(time*100)` 精确取整会漏配）。
+- 新增 `updateLyricHead()`：切歌或打开歌词面板时同步刷新面板头（封面/标题/歌手），修复面板已开时切歌头图/标题不刷新。
+
+### 二、静态扫描发现的 A/B 类问题
+
+| 编号 | 文件 | 问题 | 修法 |
+|---|---|---|---|
+| **A1** | `requirements.txt` | 缺 4 个依赖（`Pillow`/`scipy`/`imageio-ffmpeg`/`requests`，代码实际 import） | 补齐；`torch`/`torchvision` 仍走 `setup.bat` 不列（合规） |
+| **A2** | `rtmp_source.py` | ffmpeg 子进程回退路径是死的：`_open_ffmpeg()` 把 `self._ff_w=None` 后再没赋值，`get_frame()` 的 `_proc` 模式永远返回 `None` | 新增 `_probe_ffmpeg_size()` 用 ffprobe 探测宽高写进 `_ff_w/_ff_h`（失败回退 1280×720）；删掉 `get_frame` 里无用的 `import struct` |
+| **B3** | `det_worker.py` | 每帧调 `torch.cuda.empty_cache()` 强制设备同步、拖慢吞吐 | 改为每 60 帧释放一次作兜底；OOM/异常分支仍按需释放（自愈保留） |
+| **B4** | `detector.py` | 开 `auto_cascade` 时 `detect()` 每帧排序 `dl_specs` | 改为在 `__init__` 构建完 `dl_specs` 后一次性排序；`detect()` 去掉该排序 |
+
+### 三、首页图片轮播功能变更（按用户指令）
+
+1. **先删除原本地背景轮播**：`HomePage` 的 `assets/backgrounds/*.webp` 幻灯片 + crossfade 整套方法已移除（含 `import glob`）；`djilive_detector.spec` 的 `datas` 去掉 `assets/backgrounds`；原 6 张 `.webp` 源图 + 空目录已删除。
+2. **后改为接入 Lorem Picsum 在线源**（用户指令：「Lorem Picsum 给我嵌入这个的图片 删除原有图片」）：
+   - 运行时从 `https://picsum.photos/seed/{seed}/{w}/{h}` 拉取，本地 `assets/picsum_cache/` 缓存做断网兜底，恢复淡入淡出轮播。
+   - 启动先预载本地缓存（断网也能轮播上次的图），再后台线程补拉；每轮顺手异步补一张（列表封顶 12 张）。
+   - 线程安全：拉取在守护线程，落盘后 `self.after(0, …)` 回主线程入列/渲染。
+   - **注意**：运行时需联网拉首图；断网用本地缓存兜底，全无则静默无背景（不崩）。`picsum_cache/` 已加入 `.gitignore`，不入库。
+
+### 四、验证
+
+- 全部改动文件 `py_compile` / `node --check` 通过。
+- 源码全库已无对旧 `assets/backgrounds` 的引用。
+- `assets/picsum_cache/`、`models/*.pt`、`.venv/`、`dist/` 等运行时/体积产物均不入库。

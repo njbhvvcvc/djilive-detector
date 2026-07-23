@@ -14,8 +14,8 @@ import os
 import sys
 import time
 import threading
+import random
 import subprocess
-import glob
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
@@ -303,16 +303,16 @@ class HomePage(tk.Frame):
         self._bg_idx = -1
         self._bg_size = (0, 0)
         self._bg_bases = {}
-        self._bg_paths = self._load_bg_paths()
+        self._bg_paths = []     # 缓存的 Picsum 图片路径
         self._build()
 
     def _build(self):
-        # ===== 背景层（轮换照片，置于最底）=====
+        # ===== 背景层（Lorem Picsum 在线图片轮播，置于最底）=====
         self._bg = tk.Label(self, bg=self.BG_DEEP, borderwidth=0,
                             highlightthickness=0)
         self._bg.place(x=0, y=0, relwidth=1, relheight=1)
 
-        # ===== 左侧控制侧栏（覆盖在背景之上，非对称布局）=====
+        # ===== 左侧控制侧栏（非对称布局）=====
         self._panel = tk.Frame(self, bg=self.PANEL,
                                 highlightbackground=self.BORDER,
                                 highlightthickness=1, bd=0)
@@ -411,16 +411,15 @@ class HomePage(tk.Frame):
                   self._start_overlay).pack(side="left")
         self._btn(bottom, "退出", self.app.destroy).pack(side="right")
 
-        # ===== 尺寸初始化 + 启动背景轮换 =====
+        # ===== 尺寸初始化 + 启动在线背景轮播 =====
         self.update_idletasks()
         w, h = self.winfo_width(), self.winfo_height()
         if w < 2 or h < 2:
             w, h = 920, 640
         self._bg_size = (w, h)
         self._layout_sidebar()
-        if self._bg_paths:
-            self._start_bg()
         self.bind("<Configure>", self._on_configure)
+        self._start_bg()
 
     # ---------- 卡片 / 控件小工具 ----------
     def _card(self, title):
@@ -470,21 +469,36 @@ class HomePage(tk.Frame):
                              activeforeground=self.TEXT,
                              font=("Microsoft YaHei", 10), cursor="hand2")
 
-    # ---------- 轮换背景 ----------
-    def _load_bg_paths(self):
-        base = getattr(sys, "_MEIPASS", None)
-        if base:
-            d = os.path.join(base, "assets", "backgrounds")
+    # ---------- 在线背景（Lorem Picsum）----------
+    def _picsum_cache_dir(self):
+        if getattr(sys, "_MEIPASS", None):
+            base = os.path.dirname(sys.executable)
         else:
-            d = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            "assets", "backgrounds")
-        if not os.path.isdir(d):
-            return []
-        files = []
-        for e in ("*.webp", "*.jpg", "*.jpeg", "*.png"):
-            files += glob.glob(os.path.join(d, e))
-        files.sort()
-        return files
+            base = os.path.dirname(os.path.abspath(__file__))
+        d = os.path.join(base, "assets", "picsum_cache")
+        try:
+            os.makedirs(d, exist_ok=True)
+        except Exception:
+            pass
+        return d
+
+    def _fetch_picsum(self, w, h, seed):
+        """在线拉取一张 Picsum 图，存到缓存目录，返回路径；失败返回 None。"""
+        w = min(max(2, int(w)), 1600)
+        h = min(max(2, int(h)), 1200)
+        url = f"https://picsum.photos/seed/{seed}/{w}/{h}"
+        try:
+            import requests
+            r = requests.get(url, timeout=12)
+            if r.status_code != 200 or not r.content:
+                return None
+            d = self._picsum_cache_dir()
+            fn = os.path.join(d, f"picsum_{seed}.img")
+            with open(fn, "wb") as f:
+                f.write(r.content)
+            return fn
+        except Exception:
+            return None
 
     def _make_scrim(self, img, w, h):
         from PIL import ImageDraw, ImageFont
@@ -496,7 +510,7 @@ class HomePage(tk.Frame):
                 fnt = ImageFont.truetype("msyh.ttc", 13)
             except Exception:
                 fnt = ImageFont.load_default()
-            draw.text((w - 150, h - 24), "DJI 视觉识别",
+            draw.text((w - 170, h - 24), "DJI 视觉识别",
                       font=fnt, fill=(120, 150, 190))
         except Exception:
             pass
@@ -509,17 +523,14 @@ class HomePage(tk.Frame):
         key = (idx, w, h)
         if key in self._bg_bases:
             return self._bg_bases[key]
-        # 可用显示区 = 左侧控制栏右侧（照片完整显示在右半窗，不被遮挡，也不裁切）
         sw = min(500, max(360, int(w * 0.52)))
         aw, ah = max(1, w - sw), h
         try:
             im = Image.open(self._bg_paths[idx]).convert("RGB")
             ow, oh = im.size
-            # 保持原图比例，contain 完整显示 + 居中留边（绝不裁剪）
             scale = min(aw / ow, ah / oh)
             nw, nh = max(1, int(ow * scale)), max(1, int(oh * scale))
             im = im.resize((nw, nh), Image.LANCZOS)
-            # 整窗画布：左半控制栏区填底色（会被 panel 盖住），右半居中贴完整照片
             canvas = Image.new("RGB", (w, h), (7, 11, 20))
             canvas.paste(im, (sw + (aw - nw) // 2, (h - nh) // 2))
             im = canvas
@@ -538,41 +549,64 @@ class HomePage(tk.Frame):
         self._bg.image = ph
 
     def _start_bg(self):
-        if not self._bg_paths:
+        if self._bg_running:
             return
         self._bg_running = True
-        self._bg_idx = 0
-        self._show_base(0)
+        # 预载本地缓存（断网也能轮播上次的图）
+        try:
+            d = self._picsum_cache_dir()
+            for fn in os.listdir(d):
+                if fn.startswith("picsum_") and fn.endswith(".img"):
+                    self._bg_paths.append(os.path.join(d, fn))
+            self._bg_paths.sort()
+            if self._bg_paths:
+                self._bg_idx = 0
+                self._show_base(0)
+        except Exception:
+            pass
+        # 后台拉取首批图（补到 4 张），断网则留空待下次轮换重试
+        threading.Thread(target=self._prefetch_loop, daemon=True).start()
         self._schedule_next(5200)
+
+    def _prefetch_loop(self):
+        w, h = (self._bg_size[0] or 1280), (self._bg_size[1] or 720)
+        while self._bg_running and len(self._bg_paths) < 4:
+            seed = random.randint(1, 10 ** 9)
+            p = self._fetch_picsum(w, h, seed)
+            if p:
+                self.after(0, self._on_image_ready, p)
+            else:
+                break
+
+    def _on_image_ready(self, path):
+        if not self._bg_running:
+            return
+        if path not in self._bg_paths:
+            self._bg_paths.append(path)
+        if self._bg_idx < 0:
+            self._bg_idx = 0
+            self._show_base(0)
+
+    def _refill_one(self):
+        if not self._bg_running or len(self._bg_paths) >= 12:
+            return
+        w, h = (self._bg_size[0] or 1280), (self._bg_size[1] or 720)
+        seed = random.randint(1, 10 ** 9)
+        p = self._fetch_picsum(w, h, seed)
+        if p:
+            self.after(0, self._on_image_ready, p)
 
     def _schedule_next(self, delay):
         if not self._bg_running:
             return
         self._bg_after = self.after(delay, self._rotate)
 
-    def _pause_bg(self):
-        self._bg_running = False
-        for a in (self._bg_after, self._fade_after):
-            if a:
-                try:
-                    self.after_cancel(a)
-                except Exception:
-                    pass
-        self._bg_after = None
-        self._fade_after = None
-
-    def _resume_bg(self):
-        if not self._bg_paths or self._bg_running:
-            return
-        self._bg_running = True
-        self._bg_idx = 0
-        self._show_base(0)
-        self._schedule_next(5200)
-
     def _rotate(self):
         if not self._bg_running:
             self._schedule_next(5200)
             return
+        # 每次轮换顺手补充一张（异步，不阻塞 UI）
+        threading.Thread(target=self._refill_one, daemon=True).start()
         if len(self._bg_paths) < 2:
             self._schedule_next(5200)
             return
@@ -611,6 +645,7 @@ class HomePage(tk.Frame):
 
         step(0)
 
+    # ---------- 窗口尺寸变化：侧栏自适应 + 背景重绘 ----------
     def _on_configure(self, e):
         w = self.winfo_width()
         h = self.winfo_height()
@@ -688,6 +723,13 @@ class HomePage(tk.Frame):
                                  text="以客户端身份连接到已有的 RTMP 服务器。")
 
     def _start_live(self):
+        # 若直播已在后台运行（仅被切到别的页面隐藏），直接切回，
+        # 不重复创建 RTMP 收流服务器（端口 1935 已被占用会失败）。
+        if (self.app.player is not None
+                and getattr(self.app.player, "_page_mode", None) == "stream"
+                and not self.app.player.winfo_viewable()):
+            self.app.show_video()
+            return
         if self.app.live_mode.get() == "server":
             print(f"[_start_live] 进入服务器模式，准备启动 RTMP 收流服务器…")
             try:
@@ -729,6 +771,13 @@ class HomePage(tk.Frame):
         p = self.app.file_path.get().strip()
         if not p or not os.path.exists(p):
             messagebox.showerror("文件", "请先选择本地视频文件。")
+            return
+        # 若同文件已在后台播放，直接切回，不重复创建播放页
+        if (self.app.player is not None
+                and getattr(self.app.player, "_page_mode", None) == "file"
+                and getattr(self.app.player, "_page_target", None) == p
+                and not self.app.player.winfo_viewable()):
+            self.app.show_video()
             return
         self.app.show_player("file", p)
 
@@ -1370,6 +1419,8 @@ class PlayerPage(tk.Frame):
 
     # ---------------- 播放控制 ----------------
     def _toggle_pause(self):
+        if not self.winfo_viewable():
+            return
         if self._eof:
             # 已播放到结尾 → 从头重播
             try:
@@ -1410,6 +1461,9 @@ class PlayerPage(tk.Frame):
         self.app.attributes("-fullscreen", self._fullscreen)
 
     def _on_escape(self, e=None):
+        # 页面被隐藏（在别的页）时忽略，避免误掐后台直播
+        if not self.winfo_viewable():
+            return
         if self._fullscreen:
             self._fullscreen = False
             self.app.attributes("-fullscreen", False)
@@ -1444,9 +1498,14 @@ class PlayerPage(tk.Frame):
         except Exception:
             pass
         try:
+            self.app.unbind("<space>")
+        except Exception:
+            pass
+        try:
             self.app.music_engine.remove_listener(self)
         except Exception:
             pass
+        self.app.player = None   # 显式停止后清空引用，供后续 show_player 复用判断
 
     # ---------------- 读帧线程（仅文件模式） ----------------
     def _reader_loop(self):
@@ -1545,6 +1604,11 @@ class PlayerPage(tk.Frame):
 
     def _tick(self):
         if not self.running:
+            return
+        # 页面被切到其它页（仅隐藏、直播仍在后台）时，跳过渲染与识别，
+        # 但 reader_loop 仍在后台排空 RTMP 管道，推流不会被无人机掐断。
+        if not self.winfo_viewable():
+            self._schedule_tick()
             return
         self._tick_start = time.time()
         # 顶部信息
@@ -1830,6 +1894,7 @@ class App(tk.Tk):
         ttk.Label(bar, text="DJI 视觉识别",
                   font=("Microsoft YaHei", 11, "bold")).pack(side="left", padx=10)
         ttk.Button(bar, text="首页", command=self.show_home).pack(side="left", padx=4)
+        ttk.Button(bar, text="📺 视频", command=self.show_video).pack(side="left", padx=4)
         ttk.Button(bar, text="🎵 音乐", command=self.show_music).pack(side="left", padx=4)
         ttk.Button(bar, text="帮助", command=self._open_help).pack(side="left", padx=4)
         ttk.Label(bar, text="").pack(side="left", fill="x", expand=True)
@@ -1856,14 +1921,76 @@ class App(tk.Tk):
         except Exception:
             pass
 
-    def _clear_pages(self):
-        if self.player is not None:
+    def _clear_pages(self, keep_player=True):
+        # 音乐页：独立的 Edge 窗口控制器，无持续资源，直接销毁
+        if self.music is not None:
             try:
-                self.player._back_cleanup()
+                self.music.destroy()
             except Exception:
                 pass
-            self.player.destroy()
-            self.player = None
+            self.music = None
+        # 播放页（含 RTMP 收流服务器 / 识别进程）：【默认保留】，仅隐藏。
+        # 这样在首页 / 音乐页之间切换时，正在进行的直播不会被掐断；
+        # 只有当播放页自己的「◀ 返回首页」按钮显式调用 _back_cleanup 时，
+        # 才会真正停止推流并销毁页面。
+        if self.player is not None:
+            if keep_player:
+                try:
+                    self.player.pack_forget()   # 隐藏但保留对象 / 线程 / RTMP 服务器
+                except Exception:
+                    pass
+            else:
+                try:
+                    self.player._back_cleanup()
+                except Exception:
+                    pass
+                try:
+                    self.player.destroy()
+                except Exception:
+                    pass
+                self.player = None
+        self.home.pack_forget()
+
+    def show_player(self, mode, target, server=None):
+        # 若已有播放页且模式一致（直播 / 文件仍在后台运行），直接重新显示，
+        # 不重建、不重启 RTMP 服务器——避免「切换页面就把推流掐断」。
+        if self.player is not None and getattr(self.player, "_page_mode", None) == mode:
+            if self.music is not None:
+                try:
+                    self.music.destroy()
+                except Exception:
+                    pass
+                self.music = None
+            try:
+                self.home.pack_forget()
+            except Exception:
+                pass
+            self.player.pack(fill="both", expand=True)
+            return
+        self._clear_pages(keep_player=False)
+        self.player = PlayerPage(self.container, self, mode, target, server=server)
+        self.player._page_mode = mode
+        self.player._page_target = target
+        self.player.pack(fill="both", expand=True)
+
+    def show_music(self):
+        self._clear_pages(keep_player=True)   # 保留后台直播，仅切到音乐页
+        if self.music is None:
+            self.music = MusicPage(self.container, self)
+        self.music.pack(fill="both", expand=True)
+
+    def show_home(self):
+        self._clear_pages(keep_player=True)   # 保留后台直播，仅切到首页视图
+        self.home.pack(fill="both", expand=True)
+
+    def show_video(self):
+        """切回正在进行的直播 / 本地播放（若仍在后台运行）。"""
+        if self.player is None:
+            self.show_home()
+            return
+        if self.player.winfo_viewable():
+            return
+        # 销毁可能的音乐页（独立 Edge 窗口），避免堆叠
         if self.music is not None:
             try:
                 self.music.destroy()
@@ -1871,28 +1998,10 @@ class App(tk.Tk):
                 pass
             self.music = None
         try:
-            self.home._pause_bg()
+            self.home.pack_forget()
         except Exception:
             pass
-        self.home.pack_forget()
-
-    def show_player(self, mode, target, server=None):
-        self._clear_pages()
-        self.player = PlayerPage(self.container, self, mode, target, server=server)
         self.player.pack(fill="both", expand=True)
-
-    def show_music(self):
-        self._clear_pages()
-        self.music = MusicPage(self.container, self)
-        self.music.pack(fill="both", expand=True)
-
-    def show_home(self):
-        self._clear_pages()
-        self.home.pack(fill="both", expand=True)
-        try:
-            self.home._resume_bg()
-        except Exception:
-            pass
 
 
 # =========================================================================
