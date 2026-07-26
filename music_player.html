@@ -269,6 +269,9 @@
         <input id="artistInput" type="text" placeholder="输入歌手名，回车播放全部" />
         <button id="artistGo">播放</button>
       </div>
+      <div class="side-input">
+        <button id="artistWallBtn" style="width:100%" title="把该歌手的全部专辑封面下载下来当壁纸">💿 下载此歌手全部专辑做壁纸</button>
+      </div>
     </div>
     <div class="panel side-card">
       <h2><span class="bar"></span>💿 快捷选专辑</h2>
@@ -282,6 +285,7 @@
       <h2><span class="bar"></span>💡 使用说明</h2>
       • 点击歌曲行即可播放，点击歌手/专辑名可整张或整人播放。<br/>
       • 双击<span style="color:var(--accent2)">歌词</span>按钮查看同步歌词。<br/>
+      • 点<span style="color:var(--accent2)">💿 下载此歌手全部专辑做壁纸</span>：把该歌手全部专辑封面下载到「下载」目录（并导出清单 JSON），可导入壁纸软件当轮播图。<br/>
       • 数据来自 GD 音乐台公开 API，仅供学习。
     </div>
   </aside>
@@ -362,7 +366,7 @@
       <input id="setCount" type="number" min="5" max="50" value="20" />
     </div>
     <div class="field">
-      <label>CORS 代理前缀（可选）</label>
+      <label>CORS 代理前缀��可选）</label>
       <input id="setProxy" type="text" placeholder="如 https://corsproxy.io/?url=  （留空直连）" />
       <div class="hint">若浏览器报 CORS / 跨域错误，可在此填入一个 CORS 代理地址。填入后所有请求会经由该代理转发。</div>
     </div>
@@ -389,7 +393,7 @@
 (function(){
   "use strict";
   const API = "https://music-api.gdstudio.xyz/api.php";
-  // 快捷歌手：label 显示确认后的全名，q 为实际搜索词（按 NetEase 索引优化）
+  // 快捷歌手：label 显示确认后的全名，q ���实际搜索词（按 NetEase 索引优化）
   const PRESET_ARTISTS = [
     {label:"ずっと真夜中でいいのに。(ZUTOMAYO)", q:"ずっと真夜中でいいのに。"},
     {label:"ヨルシカ (Yorushika / 夜鹿)",       q:"Yorushika"},
@@ -756,6 +760,7 @@
   // 暴露给外部软件的全局接口（后续软件可直接调用）
   window.GDPlayer = Object.assign(window.GDPlayer || {}, {
     onLyricDownloaded: (window.GDPlayer && window.GDPlayer.onLyricDownloaded) || null,
+    onAlbumsDownloaded: (window.GDPlayer && window.GDPlayer.onAlbumsDownloaded) || null,
     getLyricCache:  (track) => track ? getCachedLyric(track) : null,
     exportAllLyrics: () => {
       const out = [];
@@ -765,7 +770,7 @@
       }
       return out;
     },
-    version: "1.0"
+    version: "1.1"
   });
   function renderLyricBox(){
     const box = $("lyricBox");
@@ -836,6 +841,58 @@
     }catch(e){ toast(e.message, "err"); }
   }
 
+  /* ---------- 下载歌手全部专辑做壁纸 ---------- */
+  async function downloadArtistAlbums(name){
+    name = (name || "").trim();
+    if(!name){ toast("请先在上方输入歌手名", "err"); return; }
+    toast("正在收集《" + name + "》的全部专辑…");
+    try{
+      const list = await searchRaw(name, {pages:8});
+      if(!list.length){ toast("未找到该歌手", "err"); return; }
+      // 去重：按 pic_id（封面唯一）聚合专辑
+      const seen = {}, albums = [];
+      list.forEach(t=>{
+        const pid = t.pic_id || "";
+        const key = pid || (t.album || "");
+        if(!key) return;
+        if(!seen[key]){ seen[key] = 1; albums.push({ name: t.album || "(未知专辑)", artist: t.artist || name, pic_id: pid, source: t.source }); }
+      });
+      if(!albums.length){ toast("没有可用的专辑封面", "err"); return; }
+      toast("找到 " + albums.length + " 张专辑，开始下载封面…");
+      let ok = 0, fail = 0;
+      for(const a of albums){
+        const fname = (a.artist + " - " + a.name).replace(/[\\/:*?"<>|]/g, "_").slice(0, 80) + ".jpg";
+        try{
+          const url = picURL(a, 500);
+          const fetchUrl = state.proxy ? state.proxy + encodeURIComponent(url) : url;
+          const res = await fetch(fetchUrl);
+          if(!res.ok) throw new Error("HTTP " + res.status);
+          const blob = await res.blob();
+          const obj = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = obj; link.download = fname;
+          document.body.appendChild(link); link.click(); link.remove();
+          setTimeout(()=> URL.revokeObjectURL(obj), 4000);
+          ok++;
+        }catch(e){ fail++; }
+      }
+      // 始终额外导出一份清单 JSON（不依赖跨域，桌面壁纸软件可导入）
+      const manifest = { artist: name, source: state.source, albums: albums, generatedAt: Date.now() };
+      try{
+        const mblob = new Blob([JSON.stringify(manifest, null, 2)], { type: "application/json" });
+        const mobj = URL.createObjectURL(mblob);
+        const ma = document.createElement("a");
+        ma.href = mobj; ma.download = (name + " - 专辑清单(可导入壁纸软件).json").replace(/[\\/:*?"<>|]/g, "_");
+        document.body.appendChild(ma); ma.click(); ma.remove();
+        setTimeout(()=> URL.revokeObjectURL(mobj), 4000);
+      }catch(e){}
+      // 触发扩展钩子（桌面软件若内嵌本页可直接接收）
+      try{ if(typeof window.GDPlayer?.onAlbumsDownloaded === "function") window.GDPlayer.onAlbumsDownloaded(albums); }catch(e){}
+      try{ document.dispatchEvent(new CustomEvent("gdplayer:albums", { detail: { artist: name, albums: albums } })); }catch(e){}
+      toast("专辑封面已下载 " + ok + " 张" + (fail ? ("，" + fail + " 张失败（可在设置填 CORS 代理后重试）") : "") + "。另导出清单 JSON 供壁纸软件导入。", ok ? "ok" : "err");
+    }catch(e){ toast(e.message || "下载失败", "err"); }
+  }
+
   function switchView(v){
     document.querySelectorAll(".tab[data-view]").forEach(t=> t.classList.toggle("active", t.dataset.view===v));
     $("view-search").style.display = v==="search" ? "" : "none";
@@ -897,6 +954,7 @@
     $("artistChips").addEventListener("click", e=>{ const c=e.target.closest(".chip"); if(c) playArtist(c.dataset.artist); });
     $("albumChips").addEventListener("click", e=>{ const c=e.target.closest(".chip"); if(c) playAlbum(c.dataset.album); });
     $("artistGo").addEventListener("click", ()=> playArtist($("artistInput").value));
+    $("artistWallBtn").addEventListener("click", ()=> downloadArtistAlbums($("artistInput").value));
     $("albumGo").addEventListener("click", ()=> playAlbum($("albumInput").value));
     $("artistInput").addEventListener("keydown", e=>{ if(e.key==="Enter") playArtist(e.target.value); });
     $("albumInput").addEventListener("keydown", e=>{ if(e.key==="Enter") playAlbum(e.target.value); });
@@ -976,6 +1034,12 @@
 
     renderResults(); renderPlaylist();
     toast("播放器就绪 · 数据来自 GD 音乐台");
+    // 支持 ?artist= 自动播放（供壁纸软件一键唤起播放器）
+    try{
+      const q = new URLSearchParams(location.search);
+      const qa = q.get("artist");
+      if(qa){ setTimeout(()=> playArtist(qa), 700); }
+    }catch(e){}
   }
 
   document.addEventListener("DOMContentLoaded", init);
