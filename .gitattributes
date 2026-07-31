@@ -1,0 +1,2 @@
+dist/DJILive.exe filter=lfs diff=lfs merge=lfs -text
+mediamtx.exe filter=lfs diff=lfs merge=lfs -text
